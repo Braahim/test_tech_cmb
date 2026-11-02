@@ -1,0 +1,272 @@
+version: 2
+
+models:
+  - name: bronze_accounts
+    description: "Une ligne par compte client. Typage de STG_ACCOUNTS, sans règle métier."
+    columns:
+      - name: ACCOUNT_ID
+        description: "Identifiant du compte client."
+        tests:
+          - unique
+          - not_null
+      - name: ACCOUNT_NAME
+        description: "Nom du compte (pseudonymisé dans l'extrait)."
+      - name: COUNTRY
+        description: "Code pays du compte."
+      - name: TIME_ZONE
+        description: "Fuseau horaire du compte. Non utilisé : la semaine de facturation est définie en UTC."
+      - name: CREATED_AT
+        description: "Date de création du compte (UTC)."
+        tests:
+          - not_null
+      - name: UPDATED_AT
+        description: "Dernière modification du compte (UTC)."
+      - name: _SOURCE_FILE
+        description: "Fichier source dans le stage (traçabilité)."
+      - name: _SOURCE_ROW
+        description: "Numéro de ligne dans le fichier source (traçabilité)."
+      - name: _INGESTION_TIMESTAMP
+        description: "Date de chargement dans STG_* (UTC). Traçabilité ; ce n'est pas la date d'extraction."
+        tests:
+          - not_null
+
+  - name: bronze_locations
+    description: "Une ligne par établissement. Typage de STG_LOCATIONS, sans règle métier."
+    columns:
+      - name: LOCATION_ID
+        description: "Identifiant de l'établissement."
+        tests:
+          - unique
+          - not_null
+      - name: ACCOUNT_ID
+        description: "Compte propriétaire de l'établissement."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('bronze_accounts')
+              field: ACCOUNT_ID
+      - name: LOCATION_NAME
+        description: "Nom de l'établissement (pseudonymisé dans l'extrait)."
+      - name: IS_ARCHIVED
+        description: "Soft delete sans date : état au moment de l'extraction. 10 formats sources normalisés. Un établissement archivé n'est pas facturable."
+        tests:
+          - not_null
+      - name: CREATED_AT
+        description: "Date de création de l'établissement (UTC). Début de sa période de facturation."
+        tests:
+          - not_null
+      - name: UPDATED_AT
+        description: "Dernière modification, quelle qu'elle soit (UTC). Ne peut pas servir de date d'archivage (mise à jour en masse le 18/07/2023)."
+        tests:
+          - not_null
+      - name: _SOURCE_FILE
+        description: "Fichier source dans le stage (traçabilité)."
+      - name: _SOURCE_ROW
+        description: "Numéro de ligne dans le fichier source (traçabilité)."
+      - name: _INGESTION_TIMESTAMP
+        description: "Date de chargement dans STG_* (UTC). Traçabilité ; ce n'est pas la date d'extraction."
+        tests:
+          - not_null
+
+  - name: bronze_memberships
+    description: "Une ligne par personne rattachée à un compte : un employé au sens de l'énoncé."
+    columns:
+      - name: MEMBERSHIP_ID
+        description: "Identifiant de la personne dans le compte. Clé de comptage des employés facturables."
+        tests:
+          - unique
+          - not_null
+      - name: USER_ID
+        description: "Identifiant de l'utilisateur de l'application."
+      - name: ACCOUNT_ID
+        description: "Compte de rattachement."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('bronze_accounts')
+              field: ACCOUNT_ID
+      - name: ROLE
+        description: "Rôle dans le compte. Non utilisé : tout employé planifié est facturable."
+        tests:
+          - accepted_values:
+              values: ['employee', 'manager', 'director', 'owner', 'main_owner']
+      - name: IS_ACTIVE
+        description: "Statut actif. 10 formats sources normalisés. Pas un critère de facturation."
+        tests:
+          - not_null
+      - name: CREATED_AT
+        description: "Date de création (UTC)."
+      - name: UPDATED_AT
+        description: "Dernière modification (UTC)."
+      - name: _SOURCE_FILE
+        description: "Fichier source dans le stage (traçabilité)."
+      - name: _SOURCE_ROW
+        description: "Numéro de ligne dans le fichier source (traçabilité)."
+      - name: _INGESTION_TIMESTAMP
+        description: "Date de chargement dans STG_* (UTC)."
+        tests:
+          - not_null
+
+  - name: bronze_user_contracts
+    description: >
+      Une ligne par contrat. CONTRACT_KIND = Amendment : avenant d'un contrat d'origine
+      (ORIGINAL_CONTRACT_ID), souvent absent de l'extrait.
+    columns:
+      - name: USER_CONTRACT_ID
+        description: "Identifiant du contrat. Le planning (shifts, repos) y est rattaché."
+        tests:
+          - unique
+          - not_null
+      - name: MEMBERSHIP_ID
+        description: "La personne sous contrat. 4 contrats pointent vers un membership absent de l'extrait."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('bronze_memberships')
+              field: MEMBERSHIP_ID
+              config:
+                severity: warn
+      - name: LOCATION_ID
+        description: "Établissement de rattachement : c'est là que l'employé est facturé."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('bronze_locations')
+              field: LOCATION_ID
+      - name: ACCOUNT_ID
+        description: "Compte du contrat."
+      - name: ORIGINAL_CONTRACT_ID
+        description: "Pour un avenant : contrat d'origine modifié. NULL pour un contrat standard."
+      - name: CONTRACT_KIND
+        description: "UserContract (contrat) ou Amendment (avenant)."
+        tests:
+          - accepted_values:
+              values: ['UserContract', 'Amendment']
+      - name: CONTRACT_TYPE
+        description: "Nature du contrat (CDI, CDD, saisonnier…). Pas un critère de facturation."
+        tests:
+          - accepted_values:
+              values: ['CDI', 'CDD', 'seasonal', 'extra', 'interim', 'intern', 'apprentissage']
+      - name: CONTRACT_HOURS_PER_WEEK
+        description: "Heures hebdomadaires prévues. Formats sources ' 39.99 ', '35h', '35,0' normalisés ; NULL si absent (249)."
+      - name: CONTRACT_START
+        description: "Début du contrat. Formats ISO et JJ/MM/AAAA (201 lignes) ; en lecture automatique, 123 dates seraient inversées."
+        tests:
+          - not_null
+      - name: CONTRACT_END
+        description: "Fin du contrat ; NULL si en cours."
+      - name: IS_VIRTUAL
+        description: "Contrat virtuel (1 seul cas, sans planning)."
+        tests:
+          - not_null
+      - name: IS_DAILY_WORKER
+        description: "Travailleur à la journée. Non utilisé par la facturation."
+      - name: CREATED_AT
+        description: "Date de création (UTC)."
+      - name: UPDATED_AT
+        description: "Dernière modification (UTC)."
+      - name: _SOURCE_FILE
+        description: "Fichier source dans le stage (traçabilité)."
+      - name: _SOURCE_ROW
+        description: "Numéro de ligne dans le fichier source (traçabilité)."
+      - name: _INGESTION_TIMESTAMP
+        description: "Date de chargement dans STG_* (UTC)."
+        tests:
+          - not_null
+
+  - name: bronze_shifts
+    description: "Une ligne par shift planifié. Seuls les horaires planifiés sont repris : la facturation porte sur le planifié."
+    columns:
+      - name: SHIFT_ID
+        description: "Identifiant du shift."
+        tests:
+          - unique
+          - not_null
+      - name: USER_CONTRACT_ID
+        description: "Contrat du shift. Environ 61 % pointent vers un contrat absent de l'extrait (traité en SILVER)."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('bronze_user_contracts')
+              field: USER_CONTRACT_ID
+              config:
+                severity: warn
+      - name: ACCOUNT_ID
+        description: "Compte du shift. Toujours renseigné, y compris quand le contrat est absent."
+        tests:
+          - not_null
+      - name: STARTS_AT
+        description: "Début planifié (UTC)."
+        tests:
+          - not_null
+      - name: ENDS_AT
+        description: "Fin planifiée (UTC)."
+        tests:
+          - not_null
+      - name: PLANIFICATION_TYPE
+        description: "scheduled / unscheduled ; NULL sur 15 195 shifts. Sans impact sur la facturation."
+        tests:
+          - accepted_values:
+              values: ['scheduled', 'unscheduled']
+      - name: DID_NOT_SHOW
+        description: "Absence au shift. L'employé reste facturable : il a été planifié."
+        tests:
+          - not_null
+      - name: CREATED_AT
+        description: "Date de création (UTC)."
+      - name: UPDATED_AT
+        description: "Dernière modification (UTC). Sert à déduire la date d'extraction."
+      - name: _SOURCE_FILE
+        description: "Fichier source dans le stage (traçabilité)."
+      - name: _SOURCE_ROW
+        description: "Numéro de ligne dans le fichier source (traçabilité)."
+      - name: _INGESTION_TIMESTAMP
+        description: "Date de chargement dans STG_* (UTC)."
+        tests:
+          - not_null
+
+  - name: bronze_rests
+    description: "Une ligne par repos ou absence planifié. Peut couvrir plusieurs semaines (jusqu'à 366 jours)."
+    columns:
+      - name: REST_ID
+        description: "Identifiant du repos."
+        tests:
+          - unique
+          - not_null
+      - name: USER_CONTRACT_ID
+        description: "Contrat du repos. Environ 64 % pointent vers un contrat absent de l'extrait (traité en SILVER)."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('bronze_user_contracts')
+              field: USER_CONTRACT_ID
+              config:
+                severity: warn
+      - name: ACCOUNT_ID
+        description: "Compte du repos."
+        tests:
+          - not_null
+      - name: REST_TYPE
+        description: "Type de repos (weekly_rest, paid_leave, sick_leave…). Sans impact sur la facturation ; conservé pour pouvoir en exclure si le métier le décide."
+        tests:
+          - not_null
+      - name: STARTS_AT
+        description: "Début du repos (UTC)."
+        tests:
+          - not_null
+      - name: ENDS_AT
+        description: "Fin du repos (UTC)."
+        tests:
+          - not_null
+      - name: CREATED_AT
+        description: "Date de création (UTC)."
+      - name: UPDATED_AT
+        description: "Dernière modification (UTC)."
+      - name: _SOURCE_FILE
+        description: "Fichier source dans le stage (traçabilité)."
+      - name: _SOURCE_ROW
+        description: "Numéro de ligne dans le fichier source (traçabilité)."
+      - name: _INGESTION_TIMESTAMP
+        description: "Date de chargement dans STG_* (UTC)."
+        tests:
+          - not_null

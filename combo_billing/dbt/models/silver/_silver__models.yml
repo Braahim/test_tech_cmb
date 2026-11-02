@@ -1,0 +1,217 @@
+version: 2
+
+models:
+  - name: silver_contracts_resolved
+    description: >
+      Un contrat par ligne : contrats du fichier + contrats d'origine absents, reconstruits
+      depuis leurs avenants. Le planning pointe vers le contrat d'origine, jamais vers l'avenant.
+      Hypothèse : l'avenant porte la même personne et le même établissement que l'original
+      (verrouillée par tests/assert_rebuilt_contracts_unambiguous.sql).
+    columns:
+      - name: USER_CONTRACT_ID
+        description: "Identifiant du contrat."
+        tests:
+          - unique
+          - not_null
+      - name: MEMBERSHIP_ID
+        description: "La personne. Sert à compter chaque employé une seule fois."
+        tests:
+          - not_null
+      - name: LOCATION_ID
+        description: "L'établissement du contrat : c'est là que l'employé est facturé."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('bronze_locations')
+              field: LOCATION_ID
+      - name: ACCOUNT_ID
+        description: "Compte du contrat."
+      - name: CONTRACT_KIND
+        description: "UserContract ou Amendment. Les contrats reconstruits sont des UserContract."
+      - name: RESOLUTION_SOURCE
+        description: "'file' = présent dans l'extrait ; 'amendment' = reconstruit depuis ses avenants (194)."
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['file', 'amendment']
+      - name: N_AMENDMENTS
+        description: "Nombre d'avenants ayant servi à reconstruire le contrat (NULL si 'file')."
+
+  - name: silver_weeks
+    description: >
+      Une ligne par semaine de facturation (lundi 00:00 UTC → lundi suivant, exclu).
+      Bornée par la première et la dernière planification, jamais par CURRENT_DATE.
+    columns:
+      - name: WEEK_START
+        description: "Lundi 00:00 UTC, calculé avec DAYOFWEEKISO (indépendant du paramètre WEEK_START)."
+        tests:
+          - unique
+          - not_null
+      - name: WEEK_END
+        description: "Lundi suivant, borne exclue : un shift finissant le lundi 00:00 ne touche pas la semaine suivante."
+        tests:
+          - not_null
+      - name: WEEK_STATUS
+        description: >
+          partial_start = première semaine incomplète (données à partir du samedi 08/04/2023) ;
+          complete = terminée avant l'extraction ; in_progress = semaine de l'extraction ;
+          provisional = planning saisi à l'avance, incomplet. Seules les semaines complete alimentent la facture.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['partial_start', 'complete', 'in_progress', 'provisional']
+
+  - name: silver_planning_weeks
+    description: >
+      Une ligne par contrat et par semaine où il est planifié (au moins un shift ou un repos).
+      Un repos de plusieurs semaines produit une ligne par semaine touchée.
+      Grain testé par tests/assert_planning_weeks_grain.sql.
+    columns:
+      - name: USER_CONTRACT_ID
+        description: "Contrat planifié."
+        tests:
+          - not_null
+      - name: WEEK_START
+        description: "Semaine touchée par au moins un shift ou un repos du contrat."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('silver_weeks')
+              field: WEEK_START
+      - name: ACCOUNT_ID
+        description: "Toujours connu, même quand le contrat est introuvable."
+        tests:
+          - not_null
+      - name: MEMBERSHIP_ID
+        description: "La personne. NULL si le contrat est introuvable."
+      - name: LOCATION_ID
+        description: "Établissement du contrat. NULL si le contrat est introuvable (non facturable)."
+      - name: RESOLUTION_SOURCE
+        description: "'file', 'amendment' (contrat reconstruit) ou 'unassigned' (contrat introuvable)."
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['file', 'amendment', 'unassigned']
+      - name: IS_ASSIGNED
+        description: "FALSE = planning rattaché à un compte mais à aucun établissement : compté à part, non facturé."
+        tests:
+          - not_null
+      - name: N_SHIFTS
+        description: "Nombre de shifts du contrat touchant la semaine."
+      - name: N_RESTS
+        description: "Nombre de repos du contrat touchant la semaine."
+
+  - name: silver_billing_location_week
+    description: >
+      Une ligne par établissement facturable (non archivé) et par semaine, depuis sa création
+      ou sa première planification. Inclut les semaines à 0 employé (tarif Micro).
+      Grain testé par tests/assert_billing_location_week_grain.sql.
+    columns:
+      - name: LOCATION_ID
+        description: "Établissement facturable."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('bronze_locations')
+              field: LOCATION_ID
+      - name: ACCOUNT_ID
+        description: "Compte de l'établissement."
+        tests:
+          - not_null
+      - name: WEEK_START
+        description: "Semaine de facturation."
+        tests:
+          - not_null
+      - name: WEEK_STATUS
+        description: "Statut de la semaine (voir silver_weeks)."
+        tests:
+          - not_null
+      - name: N_BILLABLE_EMPLOYEES
+        description: "Personnes distinctes (MEMBERSHIP_ID) avec au moins un shift ou un repos dans la semaine, sur l'établissement de leur contrat."
+        tests:
+          - not_null
+      - name: LOCATION_SIZE
+        description: "micro (0-5), small (6-39), large (40+) selon les employés facturables de la semaine."
+        tests:
+          - accepted_values:
+              values: ['micro', 'small', 'large']
+      - name: LOCATION_PRICE
+        description: "Prix de la grille appliqué aux employés de la semaine. Grille testée par tests/assert_pricing_grid.sql."
+        tests:
+          - not_null
+
+  - name: silver_billing_account_week
+    description: >
+      Une ligne par compte et par semaine (questions 1 et 2). Somme des établissements :
+      le prix n'est jamais recalculé sur le total du compte. Revenu réconcilié avec
+      BILLING_LOCATION_WEEK par tests/assert_account_revenue_reconciles.sql.
+    columns:
+      - name: ACCOUNT_ID
+        description: "Compte client."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('bronze_accounts')
+              field: ACCOUNT_ID
+      - name: WEEK_START
+        description: "Semaine de facturation."
+        tests:
+          - not_null
+      - name: WEEK_STATUS
+        description: "Seules les semaines 'complete' alimentent la facture mensuelle."
+        tests:
+          - not_null
+      - name: N_BILLABLE_LOCATIONS
+        description: "Q1. Établissements non archivés existant cette semaine."
+        tests:
+          - not_null
+      - name: N_BILLABLE_EMPLOYEES
+        description: >
+          Q1. Somme des employés facturables des établissements, comme dans l'exemple de l'énoncé (total 55).
+          Une personne planifiée sur deux établissements la même semaine compte deux fois (37 cas).
+        tests:
+          - not_null
+      - name: EXPECTED_REVENUE
+        description: "Q2. Somme des prix des établissements, en euros (tarif de la grille appliqué à la semaine)."
+        tests:
+          - not_null
+      - name: N_UNASSIGNED_CONTRACTS
+        description: >
+          Contrats planifiés mais introuvables dans l'extrait : on connaît le compte, pas l'établissement.
+          Comptés, non facturés : EXPECTED_REVENUE est une estimation basse.
+        tests:
+          - not_null
+
+  - name: silver_billing_account_month
+    description: >
+      Facture mensuelle simulée : moyenne des semaines complètes du mois, par compte (processus aval de l'énoncé).
+      Une semaine appartient au mois de son jeudi (ISO 8601). Grain testé par tests/assert_billing_account_month_grain.sql.
+    columns:
+      - name: ACCOUNT_ID
+        description: "Compte client."
+        tests:
+          - not_null
+      - name: BILLING_MONTH
+        description: "Premier jour du mois de facturation."
+        tests:
+          - not_null
+      - name: MONTH_STATUS
+        description: "complete si toutes les semaines du mois sont complètes ; sinon incomplete (à ne pas facturer)."
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['complete', 'incomplete']
+      - name: N_WEEKS_BILLED
+        description: "Semaines complètes où le compte est facturé, utilisées pour la moyenne."
+      - name: N_WEEKS_IN_MONTH
+        description: "Nombre de semaines rattachées au mois (4 ou 5)."
+      - name: AVG_BILLABLE_LOCATIONS
+        description: "Moyenne hebdomadaire des établissements facturables."
+      - name: AVG_BILLABLE_EMPLOYEES
+        description: "Moyenne hebdomadaire des employés facturables."
+      - name: MONTHLY_INVOICE
+        description: "Montant de la facture du mois, en euros : moyenne des revenus hebdomadaires."
+        tests:
+          - not_null
+      - name: AVG_UNASSIGNED_CONTRACTS
+        description: "Moyenne hebdomadaire des contrats non rattachés (non facturés)."

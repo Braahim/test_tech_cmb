@@ -1,0 +1,128 @@
+version: 2
+
+models:
+  - name: gold_billing_account_week
+    description: >
+      Contrat exposé : une ligne par compte et par semaine. Répond aux questions 1 et 2.
+      Toutes les semaines sont présentes ; seules les semaines WEEK_STATUS = 'complete'
+      alimentent la facture mensuelle.
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: ACCOUNT_ID
+        data_type: varchar
+        description: "Identifiant du compte client."
+        tests:
+          - not_null
+      - name: ACCOUNT_NAME
+        data_type: varchar
+        description: "Nom du compte."
+      - name: COUNTRY
+        data_type: varchar
+        description: "Code pays du compte."
+      - name: WEEK_START
+        data_type: date
+        description: "Lundi 00:00 UTC."
+        tests:
+          - not_null
+      - name: WEEK_STATUS
+        data_type: varchar
+        description: >
+          complete = facturable ; partial_start = première semaine incomplète ;
+          in_progress = semaine de l'extraction (08/04/2024) ; provisional = planning prévisionnel incomplet.
+        tests:
+          - accepted_values:
+              values: ['partial_start', 'complete', 'in_progress', 'provisional']
+      - name: N_BILLABLE_LOCATIONS
+        data_type: number(10, 0)
+        description: "Q1. Établissements non archivés."
+      - name: N_BILLABLE_EMPLOYEES
+        data_type: number(10, 0)
+        description: "Q1. Employés planifiés au moins une fois dans la semaine (shift ou repos), sur l'établissement de leur contrat."
+      - name: EXPECTED_REVENUE
+        data_type: number(12, 2)
+        description: "Q2. Revenu de la semaine en euros : somme des prix des établissements selon la nouvelle grille."
+      - name: N_UNASSIGNED_CONTRACTS
+        data_type: number(10, 0)
+        description: "Contrats planifiés mais absents de l'extrait : non facturés. EXPECTED_REVENUE est une estimation basse."
+
+  - name: gold_billing_location_week
+    description: "Contrat exposé : détail de la facture, une ligne par établissement et par semaine."
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: LOCATION_ID
+        data_type: varchar
+        description: "Identifiant de l'établissement."
+        tests:
+          - not_null
+      - name: LOCATION_NAME
+        data_type: varchar
+        description: "Nom de l'établissement."
+      - name: ACCOUNT_ID
+        data_type: varchar
+        description: "Compte de l'établissement."
+        tests:
+          - not_null
+      - name: WEEK_START
+        data_type: date
+        description: "Lundi 00:00 UTC."
+        tests:
+          - not_null
+      - name: WEEK_STATUS
+        data_type: varchar
+        description: "Statut de la semaine ; filtrer sur 'complete' pour facturer."
+      - name: N_BILLABLE_EMPLOYEES
+        data_type: number(10, 0)
+        description: "Employés distincts planifiés au moins une fois dans la semaine."
+      - name: LOCATION_SIZE
+        data_type: varchar
+        description: "micro (0-5), small (6-39), large (40+)."
+      - name: LOCATION_PRICE
+        data_type: number(12, 2)
+        description: "Prix de la semaine en euros selon la grille."
+
+  - name: gold_billing_account_month
+    description: >
+      Contrat exposé : facture mensuelle simulée par compte (moyenne des semaines complètes du mois).
+      Ne facturer que MONTH_STATUS = 'complete'.
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: ACCOUNT_ID
+        data_type: varchar
+        description: "Identifiant du compte client."
+        tests:
+          - not_null
+      - name: ACCOUNT_NAME
+        data_type: varchar
+        description: "Nom du compte."
+      - name: BILLING_MONTH
+        data_type: date
+        description: "Premier jour du mois de facturation."
+        tests:
+          - not_null
+      - name: MONTH_STATUS
+        data_type: varchar
+        description: "complete = facturable ; incomplete = au moins une semaine du mois n'est pas complète."
+      - name: N_WEEKS_BILLED
+        data_type: number(2, 0)
+        description: "Semaines utilisées pour la moyenne."
+      - name: N_WEEKS_IN_MONTH
+        data_type: number(2, 0)
+        description: "Semaines rattachées au mois (règle du jeudi, ISO 8601)."
+      - name: AVG_BILLABLE_LOCATIONS
+        data_type: number(10, 1)
+        description: "Moyenne hebdomadaire des établissements facturables."
+      - name: AVG_BILLABLE_EMPLOYEES
+        data_type: number(10, 1)
+        description: "Moyenne hebdomadaire des employés facturables."
+      - name: MONTHLY_INVOICE
+        data_type: number(12, 2)
+        description: "Montant de la facture du mois, en euros."
+      - name: AVG_UNASSIGNED_CONTRACTS
+        data_type: number(10, 1)
+        description: "Moyenne hebdomadaire des contrats non rattachés (non facturés)."

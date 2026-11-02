@@ -1,0 +1,12 @@
+combo_billing:
+  target: dev
+  outputs:
+    dev:
+      type: snowflake
+      account: ""
+      user: ""
+      role: ACCOUNTADMIN
+      database: COMBO_BILLING
+      warehouse: COMPUTE_WH
+      schema: BRONZE
+      threads: 4

@@ -1,0 +1,30 @@
+name: combo_billing
+version: '1.0.0'
+config-version: 2
+
+profile: combo_billing
+
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+analysis-paths: ["analyses"]
+
+vars:
+  # Date de l'extrait (max updated_at des fichiers). Jamais CURRENT_DATE.
+  extraction_date: '2024-04-08'
+
+models:
+  combo_billing:
+    # Descriptions des .yml poussées en COMMENT Snowflake : visibles dans Snowsight par les consommateurs
+    +persist_docs:
+      relation: true
+      columns: true
+    bronze:
+      +schema: BRONZE
+      +materialized: table
+    silver:
+      +schema: SILVER
+      +materialized: table
+    gold:
+      +schema: GOLD
+      +materialized: view

@@ -1,0 +1,20 @@
+version: 2
+
+sources:
+  - name: stage
+    description: "Copie brute des CSV Combo, chargée par setup/01_bronze.sql (COPY INTO, tout en VARCHAR)."
+    database: COMBO_BILLING
+    schema: BRONZE
+    tables:
+      - name: STG_ACCOUNTS
+        description: "Comptes clients"
+      - name: STG_LOCATIONS
+        description: "Établissements rattachés aux comptes"
+      - name: STG_MEMBERSHIPS
+        description: "Personnes enregistrées dans un compte"
+      - name: STG_USER_CONTRACTS
+        description: "Contrats liant une personne à un établissement"
+      - name: STG_SHIFTS
+        description: "Créneaux de travail planifiés"
+      - name: STG_RESTS
+        description: "Repos et absences planifiés"
